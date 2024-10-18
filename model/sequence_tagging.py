@@ -5,7 +5,7 @@ from torchcrf import CRF
 from transformers import BertModel, BertPreTrainedModel
 
 
-class BertForSequenceTagging(BertPreTrainedModel, BaseEstimator):
+class BertForSequenceTagging(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
         self.num_labels = config.num_labels
@@ -20,18 +20,12 @@ class BertForSequenceTagging(BertPreTrainedModel, BaseEstimator):
             input_ids=None,
             attention_mask=None,
             token_type_ids=None,
-            position_ids=None,
-            head_mask=None,
-            inputs_embeds=None,
             labels=None,
     ):
         outputs = self.bert(
             input_ids,
             attention_mask=attention_mask,
-            token_type_ids=token_type_ids,
-            position_ids=position_ids,
-            head_mask=head_mask,
-            inputs_embeds=inputs_embeds,
+            token_type_ids=token_type_ids
         )
         sequence_output = outputs[0]
         rnn_out, _ = self.rnn(sequence_output)
@@ -41,3 +35,4 @@ class BertForSequenceTagging(BertPreTrainedModel, BaseEstimator):
         path = self.crf.decode(emissions)
         path = torch.LongTensor(path)
         return -1 * log_likelihood, emissions, path
+

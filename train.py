@@ -23,8 +23,12 @@ def evaluate(device, model, eval_dataset, eval_batch_size):
             epoch_loss_sum += loss.item()
             batch_logits = path.detach().cpu().numpy().flatten()
             batch_labels = inputs["labels"].detach().cpu().numpy().flatten()
-        epoch_logits = np.append(epoch_logits, batch_logits, axis=0)
-        epoch_labels = np.append(epoch_labels, batch_labels, axis=0)
+            attention_mask = inputs["attention_mask"].detach().cpu().numpy().flatten()
+        # Filter out padding tokens (where attention_mask == 1)
+        valid_batch_logits = batch_logits[attention_mask == 1]
+        valid_batch_labels = batch_labels[attention_mask == 1]
+        epoch_logits = np.append(valid_batch_logits, batch_logits, axis=0)
+        epoch_labels = np.append(valid_batch_labels, batch_labels, axis=0)
     eval_loss = epoch_loss_sum / len(eval_dataset)
     eval_metric = acc_and_f1(epoch_logits, epoch_labels)
     return eval_loss, eval_metric
@@ -35,8 +39,8 @@ def train(
         train_dataset,
         model,
         eval_dataset,
-        num_train_epochs=3,
-        train_batch_size=2,
+        num_train_epochs=1,
+        train_batch_size=4,
         eval_batch_size=32,
         weight_decay=0.3,
         learning_rate=2e-5,
@@ -83,8 +87,12 @@ def train(
             epoch_loss_sum += loss.item()
             batch_logits = path.detach().cpu().numpy().flatten()
             batch_labels = inputs["labels"].detach().cpu().numpy().flatten()
-            epoch_logits = np.append(epoch_logits, batch_logits, axis=0)
-            epoch_labels = np.append(epoch_labels, batch_labels, axis=0)
+            attention_mask = inputs["attention_mask"].detach().cpu().numpy().flatten()
+            # Filter out padding tokens (where attention_mask == 1)
+            valid_batch_logits = batch_logits[attention_mask == 1]
+            valid_batch_labels = batch_labels[attention_mask == 1]
+            epoch_logits = np.append(valid_batch_logits, batch_logits, axis=0)
+            epoch_labels = np.append(valid_batch_labels, batch_labels, axis=0)
             optimizer.step()
             scheduler.step()
             model.zero_grad()

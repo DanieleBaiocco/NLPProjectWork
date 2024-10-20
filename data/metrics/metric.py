@@ -1,4 +1,7 @@
+import numpy as np
+import torch
 from sklearn.metrics import f1_score
+from torch import nn
 
 
 def simple_accuracy(preds, labels):
@@ -18,3 +21,20 @@ def acc_and_f1(preds, labels):
         'f1_claim': f1_claim,
         'f1_evidence': f1_evidence,
     }
+
+
+def mse_loss(pred_probas, label_probas):
+    loss = nn.MSELoss(reduction="mean")
+    return loss(pred_probas, label_probas)
+
+
+def mae_loss(pred_probas, label_probas):
+    loss = nn.L1Loss(reduction="mean")
+    return loss(pred_probas, label_probas)
+
+
+def kldiv_loss(pred_probas, label_probas):
+    kl_loss = nn.KLDivLoss(reduction="batchmean")
+    pred_probas_log = torch.log(pred_probas)
+    output = kl_loss(pred_probas_log, label_probas)
+    return output

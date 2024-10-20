@@ -1,6 +1,7 @@
 import collections
 import os
 
+import numpy as np
 import torch
 from torch.utils.data import TensorDataset
 from transformers import BasicTokenizer
@@ -14,11 +15,12 @@ class InputExample(object):
 
 
 class InputFeatures(object):
-    def __init__(self, input_ids, input_mask, segment_ids, label_ids):
+    def __init__(self, input_ids, input_mask, segment_ids, label_ids, label_proba):
         self.input_ids = input_ids
         self.input_mask = input_mask
         self.segment_ids = segment_ids
         self.label_ids = label_ids
+        self.label_proba = label_proba
 
 
 class DataProcessor(object):
@@ -106,7 +108,15 @@ class DataProcessor(object):
             input_mask += padding
             segment_ids += padding
             label_ids = self.convert_labels_to_ids(labels)
+            # Se il mask e' None allora non fare nulla
+            # Altrimenti maska sta label
+            label_proba = self.compute_label_probadist(label_ids)
+            # leva il primo e l'ultimo elemento
+            # assert(non contiene 0 all'interno)
+            # nel caso delle predizioni se contiene 0 che devo fare? Direi di skippare tutti gli zeri dal calcolo della proba di dist
+
             label_ids += padding
+
             assert len(label_ids) == max_seq_length
             assert len(input_ids) == max_seq_length
             assert len(input_mask) == max_seq_length
@@ -116,8 +126,28 @@ class DataProcessor(object):
                 InputFeatures(input_ids=input_ids,
                               input_mask=input_mask,
                               segment_ids=segment_ids,
-                              label_ids=label_ids))
+                              label_ids=label_ids,
+                              label_proba=label_proba))
         return features
+
+    def compute_label_probadist(self, label_ids, mask=None):
+        label_ids = np.array(label_ids)
+        if mask:
+            label_ids = label_ids[mask == 1]
+        label_ids = label_ids[1:-1]
+        label_ids = label_ids[label_ids != 0]
+        if len(label_ids) == 0:
+            return [0.0, 0.0, 0.0]
+        assert(0 not in label_ids)
+        map = {self.label_map["B-Claim"]: 0,
+               self.label_map["I-Claim"]: 0,
+               self.label_map["B-Premise"]: 1,
+               self.label_map["I-Premise"]: 1,
+               self.label_map["O"]: 2}
+        remapped_label_ids = [map[label] for label in label_ids]
+        counts = np.bincount(remapped_label_ids)
+        probabilities = counts / len(remapped_label_ids)
+        return probabilities
 
     @classmethod
     def features_to_dataset(cls, feature_list):
@@ -125,7 +155,8 @@ class DataProcessor(object):
         all_input_mask = torch.tensor([f.input_mask for f in feature_list], dtype=torch.long)
         all_segment_ids = torch.tensor([f.segment_ids for f in feature_list], dtype=torch.long)
         all_label_ids = torch.tensor([f.label_ids for f in feature_list], dtype=torch.long)
-        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids)
+        all_label_probas = torch.tensor([np.array(f.label_proba) for f in feature_list])
+        dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_label_probas)
 
         return dataset
 
@@ -172,6 +203,8 @@ class DataProcessor(object):
                     sent_labels = [replace[label] if label in replace.keys() else label for label in sent_labels]
                 sentences.append([' '.join(sent_tokens), sent_labels])
         return sentences
+
+
 
 
 def load_examples(processor: DataProcessor, data_dir, max_seq_length, tokenizer, evaluate=False, isval=False):

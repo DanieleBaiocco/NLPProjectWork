@@ -5,33 +5,43 @@ from torch.utils.data import DataLoader
 from tqdm import trange, tqdm
 from transformers import get_linear_schedule_with_warmup
 
-from data.metrics.metric import acc_and_f1
+
+def process_batch(batch, device, model, gen_preds_labels_fn, eval=False):
+    model.eval() if eval else model.train()
+    batch = tuple(t.to(device) for t in batch)
+    inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2], "labels": batch[3],
+              "labels_proba": batch[4]}
+    with torch.no_grad() if eval else torch.enable_grad():
+        outputs = model(**inputs)
+    preds, labels = gen_preds_labels_fn(inputs, outputs)
+    return outputs, preds, labels
 
 
-def evaluate(device, model, eval_dataset, eval_batch_size):
+def evaluate(device, model, eval_dataset, eval_batch_size, metrics, gen_preds_labels_fn):
     eval_dataloader = DataLoader(eval_dataset, batch_size=eval_batch_size)
     epoch_loss_sum = 0.0
-    epoch_logits, epoch_labels = [], []
 
-    for batch in tqdm(eval_dataloader, desc="Evaluating"):
-        model.eval()
-        batch = tuple(t.to(device) for t in batch)
-        with torch.no_grad():
-            inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2], "labels": batch[3]}
-            outputs = model(**inputs)
-            loss, emissions, path = outputs
+    # Reset metrics before evaluation
+    for metric in metrics:
+        metric.reset()
+
+    model.eval()
+    with torch.no_grad():
+        for batch in tqdm(eval_dataloader, desc="Evaluating"):
+            outputs, preds, labels = process_batch(batch, device, model, gen_preds_labels_fn, eval=True)
+            loss = outputs[0]
             epoch_loss_sum += loss.item()
-            batch_logits = path.detach().cpu().numpy().flatten()
-            batch_labels = inputs["labels"].detach().cpu().numpy().flatten()
-            attention_mask = inputs["attention_mask"].detach().cpu().numpy().flatten()
-        # Filter out padding tokens (where attention_mask == 1)
-        valid_batch_logits = batch_logits[attention_mask == 1]
-        valid_batch_labels = batch_labels[attention_mask == 1]
-        epoch_logits = np.append(valid_batch_logits, batch_logits, axis=0)
-        epoch_labels = np.append(valid_batch_labels, batch_labels, axis=0)
-    eval_loss = epoch_loss_sum / len(eval_dataset)
-    eval_metric = acc_and_f1(epoch_logits, epoch_labels)
-    return eval_loss, eval_metric
+
+            # Update each metric with current batch's predictions and labels
+            for metric in metrics:
+                metric.update(preds, labels)
+
+    eval_loss = epoch_loss_sum / len(eval_dataloader)
+
+    # Compute all metrics
+    eval_metrics = {metric.__class__.__name__: metric.compute().item() for metric in metrics}
+
+    return eval_loss, eval_metrics
 
 
 def train(
@@ -39,6 +49,8 @@ def train(
         train_dataset,
         model,
         eval_dataset,
+        generate_preds_labels_fn,
+        metrics,
         num_train_epochs=1,
         train_batch_size=4,
         eval_batch_size=32,
@@ -69,59 +81,61 @@ def train(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=t_total
     )
     epochs_trained = 0
-
-    tr_loss, logging_loss = 0.0, 0.0
     model.zero_grad()
     train_iterator = trange(epochs_trained, int(num_train_epochs), desc="Epoch")
     for epoch in train_iterator:
         epoch_loss_sum = 0.0
-        epoch_logits, epoch_labels = [], []
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
         for step, batch in enumerate(epoch_iterator):
-            model.train()
-            batch = tuple(t.to(device) for t in batch)
-            inputs = {"input_ids": batch[0], "attention_mask": batch[1], "token_type_ids": batch[2], "labels": batch[3]}
-            outputs = model(**inputs)
-            loss, emissions, path = outputs
+            outputs, preds, labels = process_batch(batch, device, model, generate_preds_labels_fn, eval=False)
+            loss = outputs[0]
             loss.backward()
             epoch_loss_sum += loss.item()
-            batch_logits = path.detach().cpu().numpy().flatten()
-            batch_labels = inputs["labels"].detach().cpu().numpy().flatten()
-            attention_mask = inputs["attention_mask"].detach().cpu().numpy().flatten()
-            # Filter out padding tokens (where attention_mask == 1)
-            valid_batch_logits = batch_logits[attention_mask == 1]
-            valid_batch_labels = batch_labels[attention_mask == 1]
-            epoch_logits = np.append(valid_batch_logits, batch_logits, axis=0)
-            epoch_labels = np.append(valid_batch_labels, batch_labels, axis=0)
+            # Update metrics with current batch predictions and labels
+            for metric in metrics:
+                metric.update(preds, labels)
+
             optimizer.step()
             scheduler.step()
             model.zero_grad()
-        epoch_loss = tr_loss / num_steps_per_epoch
-        epoch_metric = acc_and_f1(epoch_logits, epoch_labels)
-        eval_loss, eval_metric = evaluate(device=device, model=model, eval_dataset=eval_dataset,
-                                          eval_batch_size=eval_batch_size)
+        epoch_loss = epoch_loss_sum / num_steps_per_epoch
         history['train_loss'].append(epoch_loss)
-        history['train_metrics'].append(epoch_metric)
+
+        # Retrieve metric values after the epoch
+        epoch_metrics = {metric.__class__.__name__: metric.compute().item() for metric in metrics}
+
+        # Perform evaluation at the end of the epoch
+        eval_loss, eval_metrics = evaluate(device, model, eval_dataset, eval_batch_size, metrics)
+
+        # Append eval_loss to history
         history['eval_loss'].append(eval_loss)
-        history['eval_metrics'].append(eval_metric)
-        print_epoch_summary(epoch, epoch_loss, epoch_metric, eval_loss, eval_metric)
+
+        # Append eval_metrics to history
+        for metric_name, metric_value in eval_metrics.items():
+            history['eval_metrics'][metric_name].append(metric_value)
+
+        # Log epoch summary
+        print(f"Epoch {epoch + 1}/{num_train_epochs}")
+        print(f"Train Loss: {epoch_loss:.4f}")
+        for metric_name, metric_value in epoch_metrics.items():
+            print(f"{metric_name}: {metric_value:.4f}")
+        print(f"Eval Loss: {eval_loss:.4f}")
+        for metric_name, metric_value in eval_metrics.items():
+            print(f"{metric_name}: {metric_value:.4f}")
     return history
 
 
 def print_epoch_summary(epoch, epoch_loss, epoch_metric, eval_loss, eval_metric):
-    print(f"\n{'='*50}")
+    print(f"\n{'=' * 50}")
     print(f"Epoch {epoch + 1} Summary")
-    print(f"{'-'*50}")
+    print(f"{'-' * 50}")
     print(f"Training Loss: {epoch_loss:.4f}")
-    print(f"Training Metrics: Accuracy = {epoch_metric['acc']:.4f}, "
-          f"F1 Micro = {epoch_metric['eval_f1_micro']:.4f}, "
-          f"F1 Macro = {epoch_metric['eval_f1_macro']:.4f}, "
-          f"F1 Claim = {epoch_metric['f1_claim']:.4f}, "
-          f"F1 Evidence = {epoch_metric['f1_evidence']:.4f}")
-    print(f"Validation Loss: {eval_loss:.4f}")
-    print(f"Validation Metrics: Accuracy = {eval_metric['acc']:.4f}, "
-          f"F1 Micro = {eval_metric['eval_f1_micro']:.4f}, "
-          f"F1 Macro = {eval_metric['eval_f1_macro']:.4f}, "
-          f"F1 Claim = {eval_metric['f1_claim']:.4f}, "
-          f"F1 Evidence = {eval_metric['f1_evidence']:.4f}")
-    print(f"{'='*50}\n")
+    print("Training Metrics:")
+    for key, value in epoch_metric.items():
+        print(f"  {key} = {value:.4f}")
+
+    print(f"\nValidation Loss: {eval_loss:.4f}")
+    print("Validation Metrics:")
+    for key, value in eval_metric.items():
+        print(f"  {key} = {value:.4f}")
+    print(f"{'=' * 50}\n")

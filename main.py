@@ -1,11 +1,9 @@
 # This is a sample Python script.
-import numpy as np
 import torch
 import torchmetrics
-from torch.utils.data import DataLoader
 from transformers import BertTokenizer, BertConfig
 
-from data.metrics.metric import acc_and_f1, kldiv_loss
+from data.metrics.metric import kldiv_loss, mae_loss, mse_loss
 from model.counting import ClassificationAndCounting
 from model.sequence_tagging import BertForSequenceTagging, BertForLabelDistribution
 from preprocessing.data import DataProcessor, load_examples
@@ -18,8 +16,6 @@ from train import train, evaluate
 
 
 def main():
-
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dataprocessor = DataProcessor()
     data_dir = "./data/neoplasm"
@@ -45,27 +41,43 @@ def main():
         model_name_or_path,
         config=config
     )
-    model.to(device)
-    #wrapper = ClassificationAndCounting(learner=model, processor=dataprocessor)
-    #metrics = [torchmetrics.Accuracy(num_classes=3, average='macro', task = "multiclass"),
-    #       torchmetrics.F1Score(num_classes=3, average='macro', task = "multiclass")]
-    #history = train(device=device, train_dataset=train_ds, model=wrapper, eval_dataset=val_ds,
+    wrapper = ClassificationAndCounting(learner=model, processor=dataprocessor)
+    wrapper.to(device)
+    # metrics = [torchmetrics.Accuracy(num_classes=3, average='macro', task = "multiclass"),
+    #      torchmetrics.F1Score(num_classes=3, average='macro', task = "multiclass")]
+    # history = train(device=device, train_dataset=train_ds, model=wrapper, eval_dataset=val_ds,
     #                generate_preds_labels_fn=classification_preds_labels_fn, metrics=metrics)
-
-    # _ , test_metric = evaluate(device = device, model = model,eval_dataset= test_ds, eval_batch_size= 32)
+    # _ , test_metric = evaluate(device = device, model = model,eval_dataset= test_ds, eval_batch_size= 32,
+    # gen_preds_labels_fn=classification_preds_labels_fn)
     config.num_labels = 3
-    qua_model = BertForLabelDistribution.from_pretrained(model_name_or_path, config=config, loss_fn = kldiv_loss)
-    qua_model.to(device)
-    metrics = [torchmetrics.KLDivergence(log_prob=False, reduction="mean"),
-               torchmetrics.MeanAbsoluteError(),
-               torchmetrics.MeanSquaredError()]
-    train(device=device, train_dataset=train_ds, model=qua_model, eval_dataset=val_ds,
-                    generate_preds_labels_fn=proba_preds_labels_fn, metrics=metrics)
+    losses = [kldiv_loss, mae_loss, mse_loss]
+    models = [wrapper]
+    for loss in losses:
+        qua_model = BertForLabelDistribution.from_pretrained(model_name_or_path, config=config, loss_fn=loss)
+        qua_model.to(device)
+        models.append(qua_model)
+    histories = {}
+    test_metrics = {}
+    for model in models:
+        metrics = [torchmetrics.KLDivergence(log_prob=False, reduction="mean"),
+                   torchmetrics.MeanAbsoluteError(),
+                   torchmetrics.MeanSquaredError()]
+        history = train(device=device, train_dataset=train_ds, model=model, eval_dataset=val_ds,
+                        generate_preds_labels_fn=proba_preds_labels_fn, metrics=metrics)
+        histories[model.name] = history
+        test_metric = evaluate(device, model, test_ds, eval_batch_size= 32, metrics = metrics, gen_preds_labels_fn=proba_preds_labels_fn)
+        test_metrics[model.name] = test_metric
+
+
+
+
+
+
 
 
 def proba_preds_labels_fn(inputs, outputs):
     _, _, _, pred_proba = outputs
-    pred_proba = pred_proba.detach().cpu().numpy()
+    pred_proba = pred_proba.detach().cpu()
     labels_proba = inputs["labels_proba"]
     return pred_proba, labels_proba
 
@@ -82,7 +94,6 @@ def classification_preds_labels_fn(inputs, outputs):
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    #print(torch.__version__)
     main()
 
 # QUINDI COME NEXT STEP HO:

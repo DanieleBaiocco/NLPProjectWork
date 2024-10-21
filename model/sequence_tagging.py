@@ -48,6 +48,7 @@ class BertForLabelDistribution(BertPreTrainedModel):
         self.softmax = nn.Softmax(dim=-1)
         self.init_weights()
         self.loss_fn = loss_fn
+        self.name = "bert_quantify"
 
     def forward(
             self,

@@ -9,6 +9,7 @@ class ClassificationAndCounting:
     def __init__(self, learner, processor: DataProcessor):
         self.learner = learner
         self.processor = processor
+        self.name = "bert_classify_and_count"
 
     def forward(
             self,

@@ -20,27 +20,21 @@ def process_batch(batch, device, model, gen_preds_labels_fn, eval=False):
 def evaluate(device, model, eval_dataset, eval_batch_size, metrics, gen_preds_labels_fn):
     eval_dataloader = DataLoader(eval_dataset, batch_size=eval_batch_size)
     epoch_loss_sum = 0.0
-
     # Reset metrics before evaluation
     for metric in metrics:
         metric.reset()
-
     model.eval()
     with torch.no_grad():
         for batch in tqdm(eval_dataloader, desc="Evaluating"):
             outputs, preds, labels = process_batch(batch, device, model, gen_preds_labels_fn, eval=True)
             loss = outputs[0]
             epoch_loss_sum += loss.item()
-
             # Update each metric with current batch's predictions and labels
             for metric in metrics:
                 metric.update(preds, labels)
-
     eval_loss = epoch_loss_sum / len(eval_dataloader)
-
     # Compute all metrics
     eval_metrics = {metric.__class__.__name__: metric.compute().item() for metric in metrics}
-
     return eval_loss, eval_metrics
 
 
@@ -91,30 +85,19 @@ def train(
             loss = outputs[0]
             loss.backward()
             epoch_loss_sum += loss.item()
-            # Update metrics with current batch predictions and labels
             for metric in metrics:
                 metric.update(preds, labels)
-
             optimizer.step()
             scheduler.step()
             model.zero_grad()
         epoch_loss = epoch_loss_sum / num_steps_per_epoch
         history['train_loss'].append(epoch_loss)
-
-        # Retrieve metric values after the epoch
         epoch_metrics = {metric.__class__.__name__: metric.compute().item() for metric in metrics}
-
-        # Perform evaluation at the end of the epoch
-        eval_loss, eval_metrics = evaluate(device, model, eval_dataset, eval_batch_size, metrics)
-
-        # Append eval_loss to history
+        eval_loss, eval_metrics = evaluate(device, model, eval_dataset, eval_batch_size, metrics,
+                                           generate_preds_labels_fn)
         history['eval_loss'].append(eval_loss)
-
-        # Append eval_metrics to history
         for metric_name, metric_value in eval_metrics.items():
             history['eval_metrics'][metric_name].append(metric_value)
-
-        # Log epoch summary
         print(f"Epoch {epoch + 1}/{num_train_epochs}")
         print(f"Train Loss: {epoch_loss:.4f}")
         for metric_name, metric_value in epoch_metrics.items():
@@ -133,7 +116,6 @@ def print_epoch_summary(epoch, epoch_loss, epoch_metric, eval_loss, eval_metric)
     print("Training Metrics:")
     for key, value in epoch_metric.items():
         print(f"  {key} = {value:.4f}")
-
     print(f"\nValidation Loss: {eval_loss:.4f}")
     print("Validation Metrics:")
     for key, value in eval_metric.items():

@@ -18,7 +18,7 @@ def process_batch(batch, device, model, gen_preds_labels_fn, eval=False):
 
 
 def evaluate(device, model, eval_dataset, eval_batch_size, metrics, gen_preds_labels_fn):
-    eval_dataloader = DataLoader(eval_dataset, batch_size=eval_batch_size)
+    eval_dataloader = DataLoader(eval_dataset, batch_size=4)
     epoch_loss_sum = 0.0
     # Reset metrics before evaluation
     for metric in metrics:
@@ -31,6 +31,9 @@ def evaluate(device, model, eval_dataset, eval_batch_size, metrics, gen_preds_la
             epoch_loss_sum += loss.item()
             # Update each metric with current batch's predictions and labels
             for metric in metrics:
+                if metric.__class__.__name__ == "KLDivergence":
+                    labels = labels.clamp(min=1e-9)  # Avoid zeros in true distribution
+                    preds = preds.clamp(min=1e-9)
                 metric.update(preds, labels)
     eval_loss = epoch_loss_sum / len(eval_dataloader)
     # Compute all metrics
@@ -45,8 +48,8 @@ def train(
         eval_dataset,
         generate_preds_labels_fn,
         metrics,
-        num_train_epochs=1,
-        train_batch_size=4,
+        num_train_epochs=80,
+        train_batch_size=1,
         eval_batch_size=32,
         weight_decay=0.3,
         learning_rate=2e-5,
@@ -55,9 +58,9 @@ def train(
 ):
     history = {
         'train_loss': [],
-        'train_metrics': [],
+        'train_metrics': {},
         'eval_loss': [],
-        'eval_metrics': []
+        'eval_metrics': {}
     }
     train_dataloader = DataLoader(train_dataset, batch_size=train_batch_size)
     num_steps_per_epoch = len(train_dataloader)
@@ -75,12 +78,12 @@ def train(
         optimizer, num_warmup_steps=warmup_steps, num_training_steps=t_total
     )
     epochs_trained = 0
-    model.zero_grad()
     train_iterator = trange(epochs_trained, int(num_train_epochs), desc="Epoch")
     for epoch in train_iterator:
         epoch_loss_sum = 0.0
         epoch_iterator = tqdm(train_dataloader, desc="Iteration")
         for step, batch in enumerate(epoch_iterator):
+            optimizer.zero_grad()
             outputs, preds, labels = process_batch(batch, device, model, generate_preds_labels_fn, eval=False)
             loss = outputs[0]
             loss.backward()
@@ -89,35 +92,25 @@ def train(
                 metric.update(preds, labels)
             optimizer.step()
             scheduler.step()
-            model.zero_grad()
+
         epoch_loss = epoch_loss_sum / num_steps_per_epoch
         history['train_loss'].append(epoch_loss)
         epoch_metrics = {metric.__class__.__name__: metric.compute().item() for metric in metrics}
-        eval_loss, eval_metrics = evaluate(device, model, eval_dataset, eval_batch_size, metrics,
-                                           generate_preds_labels_fn)
-        history['eval_loss'].append(eval_loss)
-        for metric_name, metric_value in eval_metrics.items():
-            history['eval_metrics'][metric_name].append(metric_value)
+        #eval_loss, eval_metrics = evaluate(device, model, eval_dataset, eval_batch_size, metrics,
+        #                                   generate_preds_labels_fn)
+        #history['eval_loss'].append(eval_loss)
         print(f"Epoch {epoch + 1}/{num_train_epochs}")
         print(f"Train Loss: {epoch_loss:.4f}")
-        for metric_name, metric_value in epoch_metrics.items():
-            print(f"{metric_name}: {metric_value:.4f}")
-        print(f"Eval Loss: {eval_loss:.4f}")
-        for metric_name, metric_value in eval_metrics.items():
-            print(f"{metric_name}: {metric_value:.4f}")
+        update_metrics(history, epoch_metrics, 'train_metrics', epoch)
+        #print(f"Eval Loss: {eval_loss:.4f}")
+        #update_metrics(history, eval_metrics, 'eval_metrics', epoch)
     return history
+def update_metrics(history, metrics, metric_type, epoch):
+    for metric_name, metric_value in metrics.items():
+        if epoch == 0:
+            history[metric_type][metric_name] = [metric_value]
+        else:
+            history[metric_type][metric_name].append(metric_value)
+        print(f"{metric_name}: {metric_value:.4f}")
 
 
-def print_epoch_summary(epoch, epoch_loss, epoch_metric, eval_loss, eval_metric):
-    print(f"\n{'=' * 50}")
-    print(f"Epoch {epoch + 1} Summary")
-    print(f"{'-' * 50}")
-    print(f"Training Loss: {epoch_loss:.4f}")
-    print("Training Metrics:")
-    for key, value in epoch_metric.items():
-        print(f"  {key} = {value:.4f}")
-    print(f"\nValidation Loss: {eval_loss:.4f}")
-    print("Validation Metrics:")
-    for key, value in eval_metric.items():
-        print(f"  {key} = {value:.4f}")
-    print(f"{'=' * 50}\n")

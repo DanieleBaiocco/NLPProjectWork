@@ -13,8 +13,25 @@ class BertForSequenceTagging(BertPreTrainedModel):
         self.rnn = nn.GRU(config.hidden_size, config.hidden_size, batch_first=True, bidirectional=True)
         self.crf = CRF(config.num_labels, batch_first=True)
         self.classifier = nn.Linear(2 * config.hidden_size, config.num_labels)
-        self.init_weights()
+        self.custom_init_weights()
 
+    def custom_init_weights(self):
+        # Initialize weights of GRU
+        for name, param in self.rnn.named_parameters():
+            if 'weight' in name:
+                nn.init.xavier_uniform_(param)  # Xavier uniform for GRU weights
+            elif 'bias' in name:
+                nn.init.zeros_(param)  # Initialize biases to zero
+
+        # Initialize weights of CRF transitions
+        nn.init.normal_(self.crf.start_transitions, mean=0, std=0.1)
+        nn.init.normal_(self.crf.end_transitions, mean=0, std=0.1)
+        nn.init.normal_(self.crf.transitions, mean=0, std=0.1)
+
+        # Initialize weights of the classifier
+        nn.init.xavier_uniform_(self.classifier.weight)
+        if self.classifier.bias is not None:
+            nn.init.zeros_(self.classifier.bias)
     def forward(
             self,
             input_ids=None,
@@ -39,7 +56,7 @@ class BertForSequenceTagging(BertPreTrainedModel):
 
 
 class BertForLabelDistribution(BertPreTrainedModel):
-    def __init__(self, config, loss_fn):
+    def __init__(self, config, loss_fn, loss_fn_name):
         super().__init__(config)
         self.num_labels = config.num_labels
         self.bert = BertModel(config)
@@ -48,7 +65,7 @@ class BertForLabelDistribution(BertPreTrainedModel):
         self.softmax = nn.Softmax(dim=-1)
         self.init_weights()
         self.loss_fn = loss_fn
-        self.name = "bert_quantify"
+        self.name = f"bert_quantify_{loss_fn_name}"
 
     def forward(
             self,

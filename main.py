@@ -1,18 +1,15 @@
 # This is a sample Python script.
 import torch
 import torchmetrics
+from torch.utils.data import TensorDataset, Subset
 from transformers import BertTokenizer, BertConfig
 
 from data.metrics.metric import kldiv_loss, mae_loss, mse_loss
 from model.counting import ClassificationAndCounting
 from model.sequence_tagging import BertForSequenceTagging, BertForLabelDistribution
-from preprocessing.data import DataProcessor, load_examples
+from preprocessing.data import DataProcessor
 from preprocessing.tokenization import ExtendedBertTokenizer
 from train import train, evaluate
-
-
-# Press Maiusc+F10 to execute it or replace it with your code.
-# Press Double Shift to search everywhere for classes, files, tool windows, actions, and settings.
 
 
 def main():
@@ -24,12 +21,13 @@ def main():
     do_lower_case = True
     base_tokenizer = BertTokenizer.from_pretrained(model_name_or_path, do_lower_case=do_lower_case)
     tokenizer = ExtendedBertTokenizer(base_tokenizer)
-    train_ds = load_examples(processor=dataprocessor, data_dir=data_dir, max_seq_length=max_seq_length,
+    train_ds = dataprocessor.load_examples(data_dir=data_dir, max_seq_length=max_seq_length,
                              tokenizer=tokenizer)
-
-    val_ds = load_examples(processor=dataprocessor, data_dir=data_dir, max_seq_length=max_seq_length,
+    first_100_indices = list(range(10))
+    train_ds = Subset(train_ds, first_100_indices)
+    val_ds = dataprocessor.load_examples(data_dir=data_dir, max_seq_length=max_seq_length,
                            tokenizer=tokenizer, isval=True)
-    test_ds = load_examples(processor=dataprocessor, data_dir=data_dir, max_seq_length=max_seq_length,
+    test_ds = dataprocessor.load_examples(data_dir=data_dir, max_seq_length=max_seq_length,
                             tokenizer=tokenizer, evaluate=True)
 
     num_labels = len(dataprocessor.get_labels())
@@ -50,46 +48,38 @@ def main():
     # _ , test_metric = evaluate(device = device, model = model,eval_dataset= test_ds, eval_batch_size= 32,
     # gen_preds_labels_fn=classification_preds_labels_fn)
     config.num_labels = 3
-    losses = [kldiv_loss, mae_loss, mse_loss]
-    models = [wrapper]
-    for loss in losses:
-        qua_model = BertForLabelDistribution.from_pretrained(model_name_or_path, config=config, loss_fn=loss)
-        qua_model.to(device)
-        models.append(qua_model)
-    histories = {}
-    test_metrics = {}
-    for model in models:
-        metrics = [torchmetrics.KLDivergence(log_prob=False, reduction="mean"),
-                   torchmetrics.MeanAbsoluteError(),
-                   torchmetrics.MeanSquaredError()]
-        history = train(device=device, train_dataset=train_ds, model=model, eval_dataset=val_ds,
-                        generate_preds_labels_fn=proba_preds_labels_fn, metrics=metrics)
-        histories[model.name] = history
-        test_metric = evaluate(device, model, test_ds, eval_batch_size= 32, metrics = metrics, gen_preds_labels_fn=proba_preds_labels_fn)
-        test_metrics[model.name] = test_metric
+    num_class_labels = len(dataprocessor.get_labels())
+    classify_config = BertConfig.from_pretrained(
+        model_name_or_path,
+        num_labels=num_class_labels)
+    seq_tagging_model = BertForSequenceTagging.from_pretrained(
+        model_name_or_path,
+        config=classify_config
+    )
+    classify_and_count_model = ClassificationAndCounting(learner=seq_tagging_model, processor=dataprocessor)
+    classify_and_count_model.to(device)
+    metrics = [torchmetrics.Accuracy(num_classes=6, average='macro', task="multiclass").to(device),
+               torchmetrics.F1Score(num_classes=6, average='macro', task="multiclass").to(device)]
+    history = train(device=device, train_dataset=train_ds, model=classify_and_count_model, eval_dataset=val_ds,
+                    generate_preds_labels_fn=classification_preds_labels_fn, metrics=metrics)
+    print(history)
 
 
-
-
-
-
-
-
-def proba_preds_labels_fn(inputs, outputs):
+def get_quantization_preds_labels(inputs, outputs):
     _, _, _, pred_proba = outputs
-    pred_proba = pred_proba.detach().cpu()
+    pred_proba = torch.tensor(pred_proba)
     labels_proba = inputs["labels_proba"]
-    return pred_proba, labels_proba
+    return torch.tensor(pred_proba), torch.tensor(labels_proba)
 
 
-def classification_preds_labels_fn(inputs, outputs):
+def get_classf_preds_labels(inputs, outputs):
     loss, emissions, path, _ = outputs
     batch_logits = path.detach().cpu().numpy().flatten()
     batch_labels = inputs["labels"].detach().cpu().numpy().flatten()
     attention_mask = inputs["attention_mask"].detach().cpu().numpy().flatten()
     valid_batch_logits = batch_logits[attention_mask == 1]
     valid_batch_labels = batch_labels[attention_mask == 1]
-    return valid_batch_logits, valid_batch_labels
+    return torch.tensor(valid_batch_logits), torch.tensor(valid_batch_labels)
 
 
 # Press the green button in the gutter to run the script.

@@ -131,21 +131,21 @@ class DataProcessor(object):
         return features
 
     def compute_label_probadist(self, label_ids, mask=None):
-        label_ids = np.array(label_ids)
-        if mask:
-            label_ids = label_ids[mask == 1]
-        label_ids = label_ids[1:-1]
-        label_ids = label_ids[label_ids != 0]
-        if len(label_ids) == 0:
+        label_ids_np = np.array(label_ids)
+        if mask is not None:
+            label_ids_np = label_ids_np[mask == 1]
+        label_ids_np = label_ids_np[1:-1]
+        label_ids_np = label_ids_np[label_ids_np != 0]
+        if len(label_ids_np) == 0:
             return [0.0, 0.0, 0.0]
-        assert(0 not in label_ids)
+        assert (0 not in label_ids_np)
         map = {self.label_map["B-Claim"]: 0,
                self.label_map["I-Claim"]: 0,
                self.label_map["B-Premise"]: 1,
                self.label_map["I-Premise"]: 1,
                self.label_map["O"]: 2}
-        remapped_label_ids = [map[label] for label in label_ids]
-        counts = np.bincount(remapped_label_ids)
+        remapped_label_ids = [map[label] for label in label_ids_np]
+        counts = np.bincount(remapped_label_ids, minlength=3)
         probabilities = counts / len(remapped_label_ids)
         return probabilities
 
@@ -157,7 +157,6 @@ class DataProcessor(object):
         all_label_ids = torch.tensor([f.label_ids for f in feature_list], dtype=torch.long)
         all_label_probas = torch.tensor([np.array(f.label_proba) for f in feature_list])
         dataset = TensorDataset(all_input_ids, all_input_mask, all_segment_ids, all_label_ids, all_label_probas)
-
         return dataset
 
     @classmethod
@@ -204,16 +203,13 @@ class DataProcessor(object):
                 sentences.append([' '.join(sent_tokens), sent_labels])
         return sentences
 
-
-
-
-def load_examples(processor: DataProcessor, data_dir, max_seq_length, tokenizer, evaluate=False, isval=False):
-    if evaluate:
-        examples = processor.get_test_examples(data_dir)
-    elif isval:
-        examples = processor.get_dev_examples(data_dir)
-    else:
-        examples = processor.get_train_examples(data_dir)
-    features = processor.convert_examples_to_features(examples, max_seq_length=max_seq_length, tokenizer=tokenizer)
-    dataset = processor.features_to_dataset(features)
-    return dataset
+    def load_examples(self, data_dir, max_seq_length, tokenizer, evaluate=False, isval=False):
+        if evaluate:
+            examples = self.get_test_examples(data_dir)
+        elif isval:
+            examples = self.get_dev_examples(data_dir)
+        else:
+            examples = self.get_train_examples(data_dir)
+        features = self.convert_examples_to_features(examples, max_seq_length=max_seq_length, tokenizer=tokenizer)
+        dataset = self.features_to_dataset(features)
+        return dataset

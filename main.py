@@ -64,7 +64,27 @@ def main():
                     generate_preds_labels_fn=classification_preds_labels_fn, metrics=metrics)
     print(history)
 
+def main1():
+    import quapy as qp
+    from quapy.method.meta import QuaNet
+    from quapy.classification.neural import NeuralClassifierTrainer, CNNnet
 
+    # use samples of 100 elements
+    qp.environ['SAMPLE_SIZE'] = 100
+
+    # load the kindle dataset as text, and convert words to numerical indexes
+    dataset = qp.datasets.fetch_reviews('kindle', pickle=False)
+    qp.data.preprocessing.index(dataset, min_df=5, inplace=True)
+
+    # the text classifier is a CNN trained by NeuralClassifierTrainer
+    cnn = CNNnet(dataset.vocabulary_size, dataset.n_classes)
+    learner = NeuralClassifierTrainer(cnn, device='cpu', epochs=3)
+
+    # train QuaNet
+    model = QuaNet(learner, device='cpu')
+    model.fit(dataset.training)
+    estim_prevalence = model.quantify(dataset.test.instances)
+    print(estim_prevalence)
 def get_quantization_preds_labels(inputs, outputs):
     _, _, _, pred_proba = outputs
     pred_proba = torch.tensor(pred_proba)
@@ -84,7 +104,7 @@ def get_classf_preds_labels(inputs, outputs):
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
-    main()
+    main1()
 
 # QUINDI COME NEXT STEP HO:
 """
